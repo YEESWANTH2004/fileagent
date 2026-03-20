@@ -41,13 +41,27 @@ FOLDER: <folder path>
 When the user asks to undo, respond with:
 ACTION: UNDO
 
-When the user asks to create a project or folder, detect the project type and respond with:
-ACTION: CREATE
-FOLDER: <base path>
-STRUCTURE: <comma separated subfolder names>
-FILES: <comma separated filenames>
+When the user asks to rename files, respond with:
+ACTION: RENAME
+FOLDER: <folder path>
+MODE: <one of: date, lowercase, underscores, prefix, numbering, single, replace>
+PATTERN: <file pattern like *.mp4 or * for all>
+PREFIX: <prefix text if mode is prefix>
+FIND: <text to find if mode is replace>
+REPLACE: <text to replace with if mode is replace>
+OLD: <old filename if mode is single>
+NEW: <new filename if mode is single>
 
-When the user says "add", "create files", "new file", "make file" with specific filenames, respond with:
+Rename mode rules:
+- "rename with today's date" or "add date" → MODE: date
+- "rename to lowercase" → MODE: lowercase
+- "replace spaces with underscores" → MODE: underscores
+- "add prefix X" → MODE: prefix
+- "add numbers" or "number them" → MODE: numbering
+- "rename X to Y" → MODE: single
+- "replace X with Y in names" → MODE: replace
+
+When the user asks to add or create specific files inside an existing folder, respond with:
 ACTION: ADDFILE
 FOLDER: <target folder path>
 FILES: <comma separated filenames>
@@ -56,6 +70,12 @@ IMPORTANT: "add Student, Teacher to src" means ADDFILE not ORGANIZE.
 ADDFILE is for creating NEW files inside a folder.
 ORGANIZE is ONLY when user says "organize" or "clean up" a folder.
 Never use ORGANIZE when user says "add" or lists specific filenames.
+
+When the user asks to create a project or folder, detect the project type and respond with:
+ACTION: CREATE
+FOLDER: <base path>
+STRUCTURE: <comma separated subfolder names>
+FILES: <comma separated filenames>
 
 Project type rules — use ONLY relevant folders and files:
 
@@ -192,13 +212,10 @@ def create_files_in_folder(folder: str, files: list) -> int:
         if not filename:
             continue
 
-        # Add extension if missing for java files
         if "." not in filename:
             filename = filename + ".java"
 
         ext = Path(filename).suffix.lower()
-
-        # Smart placement for web files
         subfolder = SMART_PLACEMENT.get(ext)
         if subfolder and (base / subfolder).exists():
             filepath = base / subfolder / filename
@@ -222,6 +239,13 @@ def handle_action(response_text: str, history: list):
     folder = None
     folders = []
     files = []
+    mode = None
+    pattern = "*"
+    prefix = ""
+    find = ""
+    replace_with = ""
+    old = ""
+    new = ""
 
     for line in lines:
         line = line.strip()
@@ -233,6 +257,20 @@ def handle_action(response_text: str, history: list):
             folders = [f.strip() for f in line.replace("STRUCTURE:", "").strip().split(",") if f.strip()]
         elif line.startswith("FILES:"):
             files = [f.strip() for f in line.replace("FILES:", "").strip().split(",") if f.strip()]
+        elif line.startswith("MODE:"):
+            mode = line.replace("MODE:", "").strip().lower()
+        elif line.startswith("PATTERN:"):
+            pattern = line.replace("PATTERN:", "").strip()
+        elif line.startswith("PREFIX:"):
+            prefix = line.replace("PREFIX:", "").strip()
+        elif line.startswith("FIND:"):
+            find = line.replace("FIND:", "").strip()
+        elif line.startswith("REPLACE:"):
+            replace_with = line.replace("REPLACE:", "").strip()
+        elif line.startswith("OLD:"):
+            old = line.replace("OLD:", "").strip()
+        elif line.startswith("NEW:"):
+            new = line.replace("NEW:", "").strip()
 
     # SCAN
     if action == "SCAN" and folder:
@@ -262,7 +300,44 @@ def handle_action(response_text: str, history: list):
         undo_last()
         return "Undo completed."
 
-    # ADDFILE — add files to existing folder
+    # RENAME
+    elif action == "RENAME" and folder:
+        from renamer import (rename_with_date, rename_to_lowercase,
+                            rename_spaces_to_underscores, rename_add_prefix,
+                            rename_add_numbering, rename_single,
+                            rename_replace_text, preview_renames, apply_renames)
+
+        if mode == "date":
+            renames = rename_with_date(folder, pattern)
+        elif mode == "lowercase":
+            renames = rename_to_lowercase(folder, pattern)
+        elif mode == "underscores":
+            renames = rename_spaces_to_underscores(folder, pattern)
+        elif mode == "prefix":
+            renames = rename_add_prefix(folder, prefix, pattern)
+        elif mode == "numbering":
+            renames = rename_add_numbering(folder, pattern)
+        elif mode == "single":
+            renames = rename_single(folder, old, new)
+        elif mode == "replace":
+            renames = rename_replace_text(folder, find, replace_with, pattern)
+        else:
+            renames = []
+
+        if not renames:
+            console.print("[yellow]No files to rename.[/yellow]")
+            return "Nothing to rename."
+
+        preview_renames(renames)
+        confirm = input("\nApply these renames? (y/n): ").strip().lower()
+        if confirm == "y":
+            count = apply_renames(folder, renames)
+            return f"Renamed {count} files successfully."
+        else:
+            console.print("[yellow]Cancelled. No files renamed.[/yellow]")
+            return "Rename cancelled."
+
+    # ADDFILE
     elif action == "ADDFILE" and folder and files:
         console.print(f"\n[bold yellow]Files to create in {folder}:[/bold yellow]")
         for f in files:
@@ -277,7 +352,7 @@ def handle_action(response_text: str, history: list):
         count = create_files_in_folder(folder, files)
         return f"Created {count} file(s) in {folder}."
 
-    # CREATE — new project
+    # CREATE
     elif action == "CREATE" and folder:
         console.print(f"\n[bold yellow]Proposed structure:[/bold yellow]")
         console.print(f"  [cyan]{folder}/[/cyan]")
@@ -324,6 +399,8 @@ def chat():
         "[dim]Examples:[/dim]\n"
         "[dim]  'scan my downloads'[/dim]\n"
         "[dim]  'organize my downloads'[/dim]\n"
+        "[dim]  'rename all mp4s with today's date in ~/Downloads/Videos'[/dim]\n"
+        "[dim]  'replace spaces with underscores in ~/Downloads'[/dim]\n"
         "[dim]  'create a java project at ~/Desktop/MyApp'[/dim]\n"
         "[dim]  'add Student.java, Teacher.java to ~/Desktop/MyApp/src'[/dim]\n"
         "[dim]  'undo'[/dim]"
