@@ -3,6 +3,7 @@ from pathlib import Path
 from rich.console import Console
 from agent import run_agent
 from mover import undo_last
+from chat import chat 
 
 console = Console()
 
@@ -23,6 +24,11 @@ def main():
         help="Undo the last organization"
     )
     parser.add_argument(
+        "--chat",
+        action="store_true",
+        help="Start chat mode"
+    )
+    parser.add_argument(
         "--scan-only",
         action="store_true",
         help="Just scan and show files, don't move anything"
@@ -33,7 +39,9 @@ def main():
     if args.undo:
         undo_last()
         return
-
+    if args.chat:
+        chat()
+        return
     if args.scan_only:
         from scanner import scan_folder, display_scan
         results = scan_folder(args.folder, recursive=True)
