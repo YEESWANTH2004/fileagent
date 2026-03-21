@@ -50,6 +50,31 @@ FOLDER: <folder path>
 
 IMPORTANT: Always use ACTION: DUPLICATES — never use ACTION: FIND or any other variation.
 
+When the user asks to watch a folder or auto-organize new files, respond with:
+ACTION: WATCH
+FOLDER: <folder path>
+
+When the user asks to watch a folder, start watching, or auto-organize new files, respond with:
+ACTION: WATCH
+FOLDER: <folder path>
+MODE: start
+
+When the user asks to stop watching, respond with:
+ACTION: WATCH
+MODE: stop
+
+When the user asks for watch status or if watching is running, respond with:
+ACTION: WATCH
+MODE: status
+
+When the user asks to enable watch on login or auto-start watch, respond with:
+ACTION: WATCH
+MODE: enable
+
+When the user asks to disable watch auto-start, respond with:
+ACTION: WATCH
+MODE: disable
+
 When the user asks to move all files back to root, restore original state, or flatten a folder, respond with:
 ACTION: RESTORE
 FOLDER: <folder path>
@@ -323,6 +348,66 @@ def handle_action(response_text: str, history: list):
         redo_last()
         return "Redo completed."
 
+   # WATCH
+    elif action == "WATCH":
+        import subprocess
+
+        mode = None
+        for line in lines:
+            line = line.strip()
+            if line.startswith("MODE:"):
+                mode = line.replace("MODE:", "").strip().lower()
+
+        if mode == "start" or (mode is None and folder):
+            target = folder or str(Path.home() / "Downloads")
+            result = subprocess.run(
+                ["systemctl", "--user", "start", "file-agent-watch"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                console.print(f"[bold green]Watch mode started![/bold green]")
+                console.print(f"[dim]Auto-organizing new files in: {target}[/dim]")
+                console.print(f"[dim]Running silently in background.[/dim]")
+                return f"Watch mode started on {target}."
+            else:
+                console.print(f"[red]Failed to start: {result.stderr}[/red]")
+                return "Failed to start watch mode."
+
+        elif mode == "stop":
+            result = subprocess.run(
+                ["systemctl", "--user", "stop", "file-agent-watch"],
+                capture_output=True, text=True
+            )
+            console.print("[bold yellow]Watch mode stopped.[/bold yellow]")
+            return "Watch mode stopped."
+
+        elif mode == "status":
+            result = subprocess.run(
+                ["systemctl", "--user", "is-active", "file-agent-watch"],
+                capture_output=True, text=True
+            )
+            status = result.stdout.strip()
+            if status == "active":
+                console.print("[bold green]Watch mode is running![/bold green]")
+                console.print(f"[dim]Auto-organizing new files in ~/Downloads[/dim]")
+                return "Watch mode is active."
+            else:
+                console.print("[bold yellow]Watch mode is not running.[/bold yellow]")
+                return "Watch mode is inactive."
+
+        elif mode == "enable":
+            subprocess.run(["systemctl", "--user", "enable", "file-agent-watch"])
+            subprocess.run(["systemctl", "--user", "start", "file-agent-watch"])
+            console.print("[bold green]Watch mode enabled! Will auto-start on every login.[/bold green]")
+            return "Watch mode enabled and started."
+
+        elif mode == "disable":
+            subprocess.run(["systemctl", "--user", "disable", "file-agent-watch"])
+            subprocess.run(["systemctl", "--user", "stop", "file-agent-watch"])
+            console.print("[bold yellow]Watch mode disabled and stopped.[/bold yellow]")
+            return "Watch mode disabled."
+
+        return "Watch action completed."
 
     # DUPLICATES
     elif action == "DUPLICATES" and folder:
