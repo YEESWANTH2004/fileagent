@@ -5,7 +5,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 from scanner import scan_folder, display_scan
-from mover import move_files, undo_last
+from mover import move_files, undo_last, redo_last
 
 console = Console()
 CHAT_LOG = Path.home() / ".file-agent-chat-log.json"
@@ -41,6 +41,19 @@ FOLDER: <folder path>
 When the user asks to undo, respond with:
 ACTION: UNDO
 
+When the user asks to redo or redo last action, respond with:
+ACTION: REDO
+
+When the user says "find duplicates", "remove duplicates", "scan duplicates", "duplicate files", "clean duplicates", respond with EXACTLY:
+ACTION: DUPLICATES
+FOLDER: <folder path>
+
+IMPORTANT: Always use ACTION: DUPLICATES — never use ACTION: FIND or any other variation.
+
+When the user asks to move all files back to root, restore original state, or flatten a folder, respond with:
+ACTION: RESTORE
+FOLDER: <folder path>
+
 When the user asks to rename files, respond with:
 ACTION: RENAME
 FOLDER: <folder path>
@@ -61,7 +74,7 @@ Rename mode rules:
 - "rename X to Y" → MODE: single
 - "replace X with Y in names" → MODE: replace
 
-When the user asks to add or create specific files inside an existing folder, respond with:
+When the user says "add", "create files", "new file", "make file" with specific filenames, respond with:
 ACTION: ADDFILE
 FOLDER: <target folder path>
 FILES: <comma separated filenames>
@@ -103,9 +116,14 @@ ANDROID project:
 STRUCTURE: app/src/main/java, app/src/main/res, app/src/test
 FILES: README.md
 
-GENERAL/UNKNOWN project:
-STRUCTURE: src, docs, tests
+GENERAL/UNKNOWN project (just "create a folder"):
+STRUCTURE: (empty — no subfolders)
 FILES: README.md
+
+If the user says "create a folder X" without any project type,
+just create the folder with only a README.md inside.
+If the user says "create a java folder" or "java project folder",
+use the JAVA project structure.
 
 IMPORTANT rules:
 - Never mix project types — a Java project never gets HTML/CSS/JS
@@ -300,6 +318,86 @@ def handle_action(response_text: str, history: list):
         undo_last()
         return "Undo completed."
 
+    # REDO
+    elif action == "REDO":
+        redo_last()
+        return "Redo completed."
+
+
+    # DUPLICATES
+    elif action == "DUPLICATES" and folder:
+        from duplicates import find_duplicates, display_duplicates, delete_duplicates, delete_duplicates_selective
+
+        duplicates = find_duplicates(folder)
+
+        if not duplicates:
+            console.print("\n[bold green]No duplicates found![/bold green]")
+            return "No duplicates found."
+
+        display_duplicates(duplicates)
+
+        total_dupes = sum(len(files) - 1 for files in duplicates.values())
+        console.print("\n[bold]How do you want to delete?[/bold]")
+        console.print("  [cyan]a[/cyan] = delete all duplicates at once")
+        console.print("  [cyan]s[/cyan] = review each group one by one")
+        console.print("  [cyan]n[/cyan] = cancel")
+        choice = input("\nChoice (a/s/n): ").strip().lower()
+
+        if choice == "a":
+            count = delete_duplicates(duplicates)
+            return f"Deleted {count} duplicate files."
+        elif choice == "s":
+            count = delete_duplicates_selective(duplicates)
+            return f"Deleted {count} duplicate files."
+        else:
+            console.print("[yellow]Cancelled. No files deleted.[/yellow]")
+            return "Duplicate deletion cancelled."
+
+    # RESTORE
+    elif action == "RESTORE" and folder:
+        base = Path(folder)
+        if not base.exists():
+            console.print(f"[red]Folder not found: {folder}[/red]")
+            return "Folder not found."
+
+        files_to_restore = []
+        for subfolder in base.iterdir():
+            if subfolder.is_dir():
+                for file in subfolder.iterdir():
+                    if file.is_file():
+                        files_to_restore.append((file, base / file.name))
+
+        if not files_to_restore:
+            console.print("[yellow]No files found in subfolders — already flat![/yellow]")
+            return "Nothing to restore."
+
+        console.print(f"\n[bold yellow]Files to move back to {folder}:[/bold yellow]")
+        for src, dst in files_to_restore[:10]:
+            console.print(f"  [dim]├──[/dim] {src.parent.name}/{src.name} → {src.name}")
+        if len(files_to_restore) > 10:
+            console.print(f"  [dim]... and {len(files_to_restore) - 10} more[/dim]")
+
+        console.print(f"\n[bold]Total: {len(files_to_restore)} files[/bold]")
+        confirm = input("\nMove all files back to root? (y/n): ").strip().lower()
+
+        if confirm != "y":
+            console.print("[yellow]Cancelled.[/yellow]")
+            return "Restore cancelled."
+
+        moved = 0
+        skipped = 0
+        for src, dst in files_to_restore:
+            if dst.exists():
+                console.print(f"[yellow]Skipping (exists): {src.name}[/yellow]")
+                skipped += 1
+                continue
+            src.rename(dst)
+            console.print(f"[green]Restored:[/green] {src.name}")
+            moved += 1
+
+        console.print(f"\n[bold green]Done! Restored {moved} files. Skipped {skipped}.[/bold green]")
+        return f"Restored {moved} files back to {folder} root."
+
     # RENAME
     elif action == "RENAME" and folder:
         from renamer import (rename_with_date, rename_to_lowercase,
@@ -399,11 +497,13 @@ def chat():
         "[dim]Examples:[/dim]\n"
         "[dim]  'scan my downloads'[/dim]\n"
         "[dim]  'organize my downloads'[/dim]\n"
+        "[dim]  'restore all files in downloads to root'[/dim]\n"
         "[dim]  'rename all mp4s with today's date in ~/Downloads/Videos'[/dim]\n"
         "[dim]  'replace spaces with underscores in ~/Downloads'[/dim]\n"
         "[dim]  'create a java project at ~/Desktop/MyApp'[/dim]\n"
         "[dim]  'add Student.java, Teacher.java to ~/Desktop/MyApp/src'[/dim]\n"
-        "[dim]  'undo'[/dim]"
+        "[dim]  'undo'[/dim]\n"
+        "[dim]  'redo'[/dim]"
     ))
 
     history = []
